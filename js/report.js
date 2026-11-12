@@ -11,7 +11,6 @@
   const PRICE_MIN = 10000;
   const PRICE_MAX = 5000000;
   const DAY_MS = 86400000;
-  const MAP_W = 760;
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
     'August', 'September', 'October', 'November', 'December'];
@@ -257,6 +256,7 @@
       r.forEach((v, i) => {
         const td = document.createElement('td');
         td.textContent = v;
+        td.setAttribute('data-label', headers[i]);
         if (i > 0) td.className = 'num';
         tr.appendChild(td);
       });
@@ -308,16 +308,32 @@
   }
 
   // ---------- Charts ----------
+  // Every chart is drawn at the width of its box, so text is never scaled down and nothing scrolls sideways.
+  function chartWidth(host) {
+    const w = host && host.clientWidth ? host.clientWidth : 760;
+    return Math.max(280, Math.min(760, Math.floor(w)));
+  }
+
+  // Shorten text that would not fit in px pixels (about 7.2 px per character at 13px). The table
+  // under each chart keeps the full name, and the tooltip shows it too.
+  function fitText(text, px) {
+    const max = Math.max(4, Math.floor(px / 7.2));
+    return text.length > max ? text.slice(0, max - 1) + '…' : text;
+  }
+
   // Horizontal bars. Each row has one or more bars (grouped when there are several).
   // Bars can be negative (diverging chart); the zero line is drawn then.
+  // On narrow screens the label sits above its bars, so the bars keep most of the width.
   function hbar(id, spec) {
     const host = el(id);
     const rows = spec.rows;
     if (!rows.length) { emptyChart(id); return; }
     const nb = rows[0].bars.length;
-    const W = 760;
+    const W = chartWidth(host);
+    const stacked = W < 520;
+    const labelRow = stacked ? 16 : 0;
     const bh = nb > 1 ? 13 : 20;
-    const rowH = nb * bh + 12;
+    const rowH = nb * bh + 12 + labelRow;
     const top = 12 + (spec.legend ? 26 : 0);
     const H = top + rows.length * rowH + 14;
 
@@ -336,7 +352,7 @@
       });
     });
     if (dmax === dmin) dmax = dmin + 1;
-    const labelW = Math.min(230, Math.max(90, maxLabel * 7.4 + 10));
+    const labelW = stacked ? 0 : Math.min(230, Math.max(90, maxLabel * 7.4 + 10), W * 0.42);
     const leftW = maxNegText ? maxNegText * 7.2 + 14 : 0;
     const rightW = maxPosText * 7.2 + 16;
     const x0 = labelW + 10 + leftW;
@@ -357,9 +373,15 @@
 
     rows.forEach((row, i) => {
       const y0 = top + i * rowH;
-      svg.appendChild(svgText(labelW, y0 + (nb * bh) / 2 + 5, row.label, { 'text-anchor': 'end' }));
+      if (stacked) {
+        svg.appendChild(svgText(10 + leftW, y0 + 12, fitText(row.label, W - 20 - leftW),
+          { 'text-anchor': 'start', class: 'head' }));
+      } else {
+        svg.appendChild(svgText(labelW, y0 + (nb * bh) / 2 + 5 + labelRow,
+          fitText(row.label, labelW - 10), { 'text-anchor': 'end' }));
+      }
       row.bars.forEach((b, j) => {
-        const by = y0 + j * bh + 2;
+        const by = y0 + labelRow + j * bh + 2;
         const barH = bh - 3;
         const xa = X(b.value);
         const rect = svgEl('rect', {
@@ -382,7 +404,7 @@
     const host = el(id);
     const cols = spec.cols;
     if (!cols.length) { emptyChart(id); return; }
-    const W = 760;
+    const W = chartWidth(host);
     const H = 300;
     const padL = 10;
     const padR = 10;
@@ -390,6 +412,9 @@
     const padB = 46;
     const plotH = H - padT - padB;
     const colW = (W - padL - padR) / cols.length;
+    // Narrow columns cannot hold every label, so value and axis labels are thinned out.
+    const showValues = colW >= 26;
+    const showLabel = i => colW >= 30 || i % 2 === 0;
     const maxV = Math.max(1, Math.max.apply(null, cols.map(c => c.value)));
     const svg = svgRoot(host, W, H, spec.label);
     svg.appendChild(svgEl('line', { x1: padL, y1: padT + plotH, x2: W - padR, y2: padT + plotH, class: 'axis' }));
@@ -400,9 +425,13 @@
       const y = padT + plotH - h;
       svg.appendChild(withTitle(svgEl('rect', { x: x, y: y, width: w, height: Math.max(h, 0.6), class: c.cls || 'b1' }),
         c.tip || (c.label + ': ' + c.text)));
-      svg.appendChild(svgText(x + w / 2, y - 6, c.text, { 'text-anchor': 'middle', class: 'small' }));
-      svg.appendChild(svgText(x + w / 2, padT + plotH + 17, c.label,
-        { 'text-anchor': 'middle', class: spec.smallLabels ? 'small' : '' }));
+      if (showValues) {
+        svg.appendChild(svgText(x + w / 2, y - 6, c.text, { 'text-anchor': 'middle', class: 'small' }));
+      }
+      if (showLabel(i)) {
+        svg.appendChild(svgText(x + w / 2, padT + plotH + 17, c.label,
+          { 'text-anchor': 'middle', class: spec.smallLabels ? 'small' : '' }));
+      }
     });
     if (spec.marker) {
       const mx = padL + spec.marker.pos * colW;
@@ -415,12 +444,16 @@
   function slope(id, spec) {
     const host = el(id);
     const items = spec.items;
-    const W = 760;
+    const W = chartWidth(host);
     const rowH = 22;
     const top = 44;
     const H = top + items.length * rowH + 16;
-    const leftX = 330;
-    const rightX = 430;
+    // The two columns sit near the middle. On a wide chart they are 100 units apart; on a phone they are
+    // closer, and the city names are shortened so that they fit beside the lines.
+    const half = W >= 600 ? 50 : W * 0.08;
+    const leftX = W / 2 - half;
+    const rightX = W / 2 + half;
+    const sideRoom = Math.max(60, (W - (rightX - leftX)) / 2 - 24);
     const svg = svgRoot(host, W, H, spec.label);
     svg.appendChild(svgText(leftX, 24, spec.leftTitle, { 'text-anchor': 'middle', class: 'head' }));
     svg.appendChild(svgText(rightX, 24, spec.rightTitle, { 'text-anchor': 'middle', class: 'head' }));
@@ -432,8 +465,8 @@
       svg.appendChild(withTitle(line, it.tip));
       svg.appendChild(svgEl('circle', { cx: leftX, cy: ya, r: 3.5, class: 'dot' + cls }));
       svg.appendChild(svgEl('circle', { cx: rightX, cy: yb, r: 3.5, class: 'dot' + cls }));
-      svg.appendChild(svgText(leftX - 12, ya + 4.5, it.label + '  #' + it.a, { 'text-anchor': 'end' }));
-      svg.appendChild(svgText(rightX + 12, yb + 4.5, '#' + it.b + '  ' + it.label, { 'text-anchor': 'start' }));
+      svg.appendChild(svgText(leftX - 12, ya + 4.5, fitText(it.label, sideRoom) + '  #' + it.a, { 'text-anchor': 'end' }));
+      svg.appendChild(svgText(rightX + 12, yb + 4.5, '#' + it.b + '  ' + fitText(it.label, sideRoom), { 'text-anchor': 'start' }));
     });
   }
 
@@ -1155,6 +1188,7 @@
   // The map: one circle per city, placed at the median latitude and longitude of its sales.
   function buildMap() {
     const host = el('f-map');
+    const W = chartWidth(host);
     const pts = EXPLORE.cityPos;
     const pad = 40;
     const lats = pts.map(p => p.lat);
@@ -1164,12 +1198,12 @@
     const lonMin = Math.min.apply(null, lons);
     const lonMax = Math.max.apply(null, lons);
     const kx = Math.cos((latMin + latMax) / 2 * Math.PI / 180);
-    const scale = (MAP_W - 2 * pad) / ((lonMax - lonMin) * kx);
+    const scale = (W - 2 * pad) / ((lonMax - lonMin) * kx);
     const H = Math.round((latMax - latMin) * scale + 2 * pad);
     const x = p => pad + (p.lon - lonMin) * kx * scale;
     const y = p => pad + (latMax - p.lat) * scale;
     const maxN = Math.max.apply(null, pts.map(p => p.n));
-    const svg = svgRoot(host, MAP_W, H, 'Map of cities. Click a city to filter the results to it.');
+    const svg = svgRoot(host, W, H, 'Map of cities. Click a city to filter the results to it.');
     pts.forEach(p => {
       const cx = x(p);
       const cy = y(p);
@@ -1187,7 +1221,10 @@
       // Labels stay hidden until a city is hovered, focused or selected, because the cities overlap.
       const wrap = svgEl('g', { class: 'city-wrap' });
       wrap.appendChild(node);
-      wrap.appendChild(svgText(cx + radius + 4, cy + 4, p.city, { class: 'map-label' }));
+      // Cities on the right-hand side get their label on the left, so the label stays inside the map.
+      const toLeft = cx > W * 0.6;
+      wrap.appendChild(svgText(toLeft ? cx - radius - 4 : cx + radius + 4, cy + 4, p.city,
+        { class: 'map-label', 'text-anchor': toLeft ? 'end' : 'start' }));
       svg.appendChild(wrap);
       EXPLORE.mapNodes[p.city] = { circle: node, wrap: wrap };
     });
@@ -1290,6 +1327,7 @@
       RESULT_COLS.forEach(c => {
         const td = document.createElement('td');
         const v = row[c.key];
+        td.setAttribute('data-label', c.label);
         if (c.type === 'num') td.className = 'num';
         td.textContent = (c.type === 'text') ? v : (v === null ? '—' : c.fmt(v));
         tr2.appendChild(td);
@@ -1368,6 +1406,7 @@
       r.forEach((v, i) => {
         const td = document.createElement('td');
         td.textContent = v;
+        td.setAttribute('data-label', ['Measure', A.name, B.name][i]);
         if (i > 0) td.className = 'num';
         tr.appendChild(td);
       });
@@ -1515,6 +1554,43 @@
     el('q10-beds').addEventListener('change', renderQ10);
   }
 
+  // ---------- Light and dark modes ----------
+  // The toggle sets data-theme on <html>. Without a choice, the system setting applies.
+  function currentTheme() {
+    const attr = document.documentElement.getAttribute('data-theme');
+    if (attr === 'light' || attr === 'dark') return attr;
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+
+  function initTheme() {
+    const button = el('theme-toggle');
+    const showState = () => button.setAttribute('aria-pressed', currentTheme() === 'dark' ? 'true' : 'false');
+    showState();
+    button.addEventListener('click', () => {
+      const next = currentTheme() === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('homeSalesTheme', next); } catch (e) { /* the choice lasts for this visit only */ }
+      showState();
+    });
+  }
+
+  // Charts are drawn to the width of their box, so they are redrawn when the width changes
+  // (for example, when a phone is turned sideways).
+  function initResize() {
+    let timer = null;
+    let lastWidth = window.innerWidth;
+    window.addEventListener('resize', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (window.innerWidth === lastWidth || !DB) return;
+        lastWidth = window.innerWidth;
+        renderAll();
+        buildMap();
+        renderExplore();
+      }, 250);
+    });
+  }
+
   function init() {
     fetch(DATA_URL)
       .then(res => {
@@ -1528,6 +1604,8 @@
         renderAll();
         bindControls();
         initExplore();
+        initTheme();
+        initResize();
         const status = el('stat-line');
         status.textContent = 'Loaded ' + count(DB.rows.length) + ' sales from the data file. ' +
           'All numbers below were computed from it.';
