@@ -5,23 +5,62 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>College-town home sales: ten questions answered</title>
   <link rel="icon" href="data:,">
+  <script>
+    // Apply the reader's saved light or dark choice before the page paints, so there is no flash.
+    try {
+      var savedTheme = localStorage.getItem('homeSalesTheme');
+      if (savedTheme === 'light' || savedTheme === 'dark') {
+        document.documentElement.setAttribute('data-theme', savedTheme);
+      }
+    } catch (e) { /* storage can be blocked; the system setting then applies */ }
+  </script>
   <style>
+    /* Light is the default palette. Dark follows the system setting unless the reader picks a mode with
+       the toggle, which sets data-theme on <html>. */
     :root {
-      color-scheme: light dark;
+      color-scheme: light;
       --c1: #2b6cb0;
       --c2: #a0aec0;
-      --chi: #dd6b20;
+      --chi: #c05621;
       --cneg: #c53030;
-      --grid: rgba(128, 128, 128, 0.4);
+      --grid: rgba(90, 100, 115, 0.45);
     }
     @media (prefers-color-scheme: dark) {
-      :root {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
         --c1: #63b3ed;
         --c2: #718096;
         --chi: #f6ad55;
         --cneg: #fc8181;
+        --grid: rgba(160, 170, 185, 0.45);
       }
     }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --c1: #63b3ed;
+      --c2: #718096;
+      --chi: #f6ad55;
+      --cneg: #fc8181;
+      --grid: rgba(160, 170, 185, 0.45);
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --c1: #2b6cb0;
+      --c2: #a0aec0;
+      --chi: #c05621;
+      --cneg: #c53030;
+      --grid: rgba(90, 100, 115, 0.45);
+    }
+    .site-header { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; justify-content: space-between;
+      align-items: flex-start; }
+    .theme-toggle {
+      font: inherit; padding: 0.35rem 0.75rem; border-radius: 4px; cursor: pointer; white-space: nowrap;
+      border: 1px solid var(--grid); background: transparent; color: inherit;
+    }
+    .theme-toggle:focus-visible, select:focus-visible, input:focus-visible, button:focus-visible,
+    a:focus-visible { outline: 3px solid var(--chi); outline-offset: 2px; }
+    .skip { position: absolute; left: -999px; }
+    .skip:focus { left: 1rem; top: 1rem; background: Canvas; color: CanvasText; padding: 0.5rem; }
     body {
       max-width: 54rem;
       margin: 0 auto;
@@ -53,8 +92,9 @@
       padding: 0.3rem 0.5rem;
       max-width: 100%;
     }
-    .chart { overflow-x: auto; margin: 1rem 0 0.5rem; }
-    .chart svg { display: block; width: 100%; min-width: 580px; height: auto; }
+    /* Charts are drawn to the width of their box (see js/report.js), so nothing needs sideways scrolling. */
+    .chart { margin: 1rem 0 0.5rem; }
+    .chart svg { display: block; width: 100%; height: auto; }
     .chart text { font-size: 13px; fill: currentColor; }
     .chart .small { font-size: 11px; }
     .chart .axis { stroke: var(--grid); stroke-width: 1; }
@@ -75,6 +115,18 @@
     details.values { margin-top: 0.5rem; }
     details.values summary { cursor: pointer; font-weight: 600; }
     .toc { columns: 2; padding-left: 1.25rem; }
+    @media (max-width: 640px) {
+      body { padding: 1.25rem 0.75rem 3rem; }
+      h1 { font-size: 1.5rem; }
+      .toc { columns: 1; }
+      .filters, .keynums, .controls { gap: 0.6rem; }
+      .field, .filters .field, .controls .field { width: 100%; }
+      .filters select, .controls select, .range-box select, .field select { width: 100%; }
+      .range-box .sliders { min-width: 0; grid-template-columns: 1fr; }
+      .keynums .card { min-width: 0; flex: 1 1 10rem; }
+      .actions button { flex: 1 1 auto; }
+      .map { border-radius: 4px; }
+    }
     .explore { margin-top: 3rem; padding-top: 1.25rem; border-top: 2px solid var(--grid); }
     .explore h3 { font-size: 1.1rem; margin: 1.75rem 0 0.25rem; }
     .filters, .range-box, .actions, .keynums {
@@ -108,7 +160,26 @@
       cursor: pointer; padding: 0; text-align: inherit; }
     th[aria-sort="ascending"]::after { content: " \25B2"; }
     th[aria-sort="descending"]::after { content: " \25BC"; }
-    .table-wrap { overflow-x: auto; }
+    .table-wrap { margin-top: 0.5rem; }
+    /* On narrow screens each table row becomes a stacked block, with the column name before each value.
+       The header buttons stay visible, so sorting still works on a phone. */
+    @media (max-width: 640px) {
+      .table-wrap table, .table-wrap tbody, .table-wrap tr, .table-wrap td,
+      .values table tbody, .values table tr, .values table td, .values table {
+        display: block; width: 100%;
+      }
+      .table-wrap thead tr, .values table thead tr { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; }
+      .table-wrap thead th, .values table thead th { border: 0; padding: 0.2rem 0; }
+      .table-wrap tbody tr, .values table tbody tr {
+        border-bottom: 1px solid var(--grid); padding: 0.35rem 0;
+      }
+      .table-wrap tbody td, .values table tbody td { border: 0; padding: 0.1rem 0; }
+      .table-wrap tbody td::before, .values table tbody td::before {
+        content: attr(data-label) ": "; font-weight: 600;
+      }
+      .table-wrap td.num, .table-wrap th.num { text-align: left; }
+      .values table thead, .values table thead tr { display: block; }
+    }
     .cmp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem; }
     .cmp-grid .card { border: 1px solid var(--grid); border-radius: 6px; padding: 0.6rem 1rem; }
     .cmp-grid .value { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -119,8 +190,12 @@
   </style>
 </head>
 <body>
+  <a class="skip" href="#explore">Skip to the explore filters</a>
   <header>
-    <h1>College-town home sales: ten questions answered</h1>
+    <div class="site-header">
+      <h1>College-town home sales: ten questions answered</h1>
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-pressed="false">Dark mode</button>
+    </div>
     <p>
       This report answers ten questions about home sales in
       <span id="stat-cities">the</span> cities and
@@ -284,7 +359,8 @@
       <h2 id="q6-title">Q6. What is the median annual property tax as a percent of sale price, for each campus area?</h2>
       <p class="answer" id="q6-answer">Loading&hellip;</p>
       <p class="note">Uses valid-price sales where <code>tax_annual_amount</code> is greater than 0 and less than
-        the sale price. Each bar is the campus area's median of tax divided by sale price.</p>
+        the sale price. Each bar is the median, across that campus area's sales, of each sale's tax divided by its
+        sale price.</p>
       <div class="chart" id="q6-chart"></div>
       <div id="q6-table"></div>
     </section>
@@ -347,6 +423,68 @@
       <div id="q10-table"></div>
     </section>
   </main>
+
+  <section class="question" id="data-methods" aria-labelledby="data-methods-title">
+    <h2 id="data-methods-title">Data and methods</h2>
+
+    <h3>Source</h3>
+    <p>This page uses the College-town home sales dataset, version 1.0, in
+      <code>data/college_town_home_sales.csv</code>. Each row is one completed home sale, with the dates the home
+      was listed, went under contract and closed. The file is read and used as it is. Nothing is removed from it,
+      and no value is changed. The values are as reported by the collection source, not checked against county
+      records, so an address, parcel number or assessed value may differ from the county's own file.</p>
+
+    <h3>Rules used</h3>
+    <ul class="rules">
+      <li><strong>Price rule.</strong> A sale has a valid price when <code>sale_price</code> is from $10,000 to
+        $5,000,000, inclusive. Most figures use valid-price sales only. The exceptions are Q2 and Q3, which use
+        all rows, and Q9, which uses all rows with a sale date. Each question says which rule it uses.</li>
+      <li><strong>Days on market</strong> is <code>contract_date</code> minus <code>list_date</code>, in days,
+        using only sales that have both dates. Sales where either date is blank are left out of those figures.
+        A blank date is not treated as zero. <code>sale_date</code> minus <code>list_date</code> is not used,
+        because it adds the time to close.</li>
+      <li><strong>Missing values.</strong> A blank sale date means the sale is left out of the year and month
+        figures (Q4 and Q9 and the year chart in Explore). A blank tax amount is left out of Q6. A blank distance
+        is left out of distance medians. In Explore, a blank garage, basement, fireplace, living-area or
+        year-built value is treated as <em>unknown</em>, not as "no" or zero. A sale with an unknown value is left
+        out only when a filter uses that field, and the page shows how many were left out. A living area of 0 is
+        treated as unknown.</li>
+      <li><strong>Campus area</strong> is the <code>university</code> column, which has 11 values.
+        <strong>City</strong> is the city and state together, such as "Champaign, IL", which has 18 values.</li>
+      <li><strong>Year and month</strong> come from <code>sale_date</code>. Data for 2026 covers only part of the year,
+        because the data was collected in March 2026.</li>
+      <li><strong>Medians</strong> are used unless a question asks for a mean. A median of an even number of sales
+        is the average of the two middle values. Q2 is the one question that uses a mean.</li>
+      <li><strong>Ties.</strong> When two or more cities or campus areas tie, every tied place is named.</li>
+      <li><strong>Rounding.</strong> Dollars are rounded to whole dollars. Days, miles and percents are rounded to one
+        decimal place, with halves rounded up.</li>
+      <li><strong>Street addresses are not unique.</strong> Sales that share an address are kept. <code>listing_id</code>
+        identifies each row, and <code>parcel_number</code> tells units in one building apart.</li>
+      <li><strong>Map positions.</strong> Each city on the map is placed at the median latitude and longitude of its
+        sales. These are not campus locations, which the dataset does not give.</li>
+      <li><strong>Distance</strong> (<code>miles_to_campus</code>) is straight-line distance, not driving distance.</li>
+    </ul>
+
+    <h3>Known limits</h3>
+    <p>These are limits of the data itself, from its description sheet. The page does not correct them.</p>
+    <ul class="rules">
+      <li>Some sale prices are implausible, such as a sale of $0 or one above $5,000,000. The valid-price rule
+        removes them from the figures that use it.</li>
+      <li><code>home_type</code> is unreliable, so the page does not use it. Some living areas are 0, which the
+        page treats as unknown. Some tax amounts are implausibly large, and Q6 uses only taxes that are above 0 and
+        below the sale price. Lot size is not used.</li>
+      <li>Days on market can be measured only for sales with both dates, and those sales are not a random sample.
+        Homes sold without a listing are often new construction.</li>
+      <li><code>tax_assessed_value</code> is not the sale price, so the page does not compare the two.</li>
+    </ul>
+
+    <h3>Citation</h3>
+    <blockquote>
+      <p>College-town home sales dataset, version 1.0 (2026). University of Illinois-Deloitte Foundation Center for
+        Business Emerging Technologies. Data collected March 2026.</p>
+    </blockquote>
+    <p class="note">The description sheet is in <code>docs/data_description_sheet.md</code> in the repository.</p>
+  </section>
 
   <section class="question" id="method" aria-labelledby="method-title">
     <h2 id="method-title">Checking the numbers</h2>
