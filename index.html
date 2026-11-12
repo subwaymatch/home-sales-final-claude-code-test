@@ -1,31 +1,261 @@
 <!DOCTYPE html>
-<!-- A placeholder from the Home Sales template. Replace this file with your site's first page. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Under construction</title>
-  <!-- An empty icon, so the browser doesn't log an error looking for favicon.ico -->
+  <title>College-town home sales: ten questions answered</title>
   <link rel="icon" href="data:,">
   <style>
-    :root { color-scheme: light dark; }
-    body {
-      max-width: 40rem;
-      margin: 0 auto;
-      padding: 3rem 1rem;
-      font-family: system-ui, sans-serif;
-      line-height: 1.5;
+    :root {
+      color-scheme: light dark;
+      --c1: #2b6cb0;
+      --c2: #a0aec0;
+      --chi: #dd6b20;
+      --cneg: #c53030;
+      --grid: rgba(128, 128, 128, 0.4);
     }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --c1: #63b3ed;
+        --c2: #718096;
+        --chi: #f6ad55;
+        --cneg: #fc8181;
+      }
+    }
+    body {
+      max-width: 54rem;
+      margin: 0 auto;
+      padding: 2rem 1rem 4rem;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+    h1 { font-size: 1.9rem; line-height: 1.2; margin-bottom: 0.5rem; }
+    h2 { font-size: 1.35rem; margin: 0 0 0.6rem; }
+    section.question {
+      margin-top: 3rem;
+      padding-top: 1.25rem;
+      border-top: 1px solid var(--grid);
+    }
+    .answer { font-size: 1.05rem; margin: 0.5rem 0 0.75rem; }
+    .note { font-size: 0.9rem; opacity: 0.85; margin: 0.5rem 0; }
+    .status { font-size: 0.95rem; font-weight: 600; }
+    .status.error { color: var(--cneg); }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.5rem;
+      align-items: center;
+      margin: 0.75rem 0 0.25rem;
+    }
+    .controls label { font-weight: 600; }
+    select {
+      font: inherit;
+      padding: 0.3rem 0.5rem;
+      max-width: 100%;
+    }
+    .chart { overflow-x: auto; margin: 1rem 0 0.5rem; }
+    .chart svg { display: block; width: 100%; min-width: 580px; height: auto; }
+    .chart text { font-size: 13px; fill: currentColor; }
+    .chart .small { font-size: 11px; }
+    .chart .axis { stroke: var(--grid); stroke-width: 1; }
+    .chart .marker { stroke: currentColor; stroke-width: 2; stroke-dasharray: 5 4; }
+    .chart .b1 { fill: var(--c1); }
+    .chart .b2 { fill: var(--c2); }
+    .chart .hi { fill: var(--chi); }
+    .chart .down { fill: var(--cneg); }
+    .chart .bar-bg { fill: var(--grid); }
+    .chart .line { stroke: var(--c2); stroke-width: 2; fill: none; }
+    .chart .line.changed { stroke: var(--chi); stroke-width: 3; }
+    .chart .dot { fill: var(--c2); }
+    .chart .dot.changed { fill: var(--chi); }
+    .chart .head { font-weight: 700; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.92rem; margin-top: 0.5rem; }
+    th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--grid); }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    details.values { margin-top: 0.5rem; }
+    details.values summary { cursor: pointer; font-weight: 600; }
+    .toc { columns: 2; padding-left: 1.25rem; }
+    .rules li { margin-bottom: 0.35rem; }
     footer { margin-top: 3rem; font-size: 0.875rem; opacity: 0.75; }
+    noscript { display: block; font-weight: 600; color: var(--cneg); }
   </style>
 </head>
 <body>
+  <header>
+    <h1>College-town home sales: ten questions answered</h1>
+    <p>
+      This report answers ten questions about home sales in
+      <span id="stat-cities">the</span> cities and
+      <span id="stat-campuses">the</span> campus areas in the College-town home sales dataset.
+      Every number on this page is computed in your browser from
+      <a href="data/college_town_home_sales.csv">data/college_town_home_sales.csv</a> when the page loads.
+      The file is not changed.
+    </p>
+    <p id="stat-line" class="status" role="status">Loading the data&hellip;</p>
+    <noscript>This page needs JavaScript to read the data file and draw the charts.</noscript>
+  </header>
+
+  <nav aria-label="Questions">
+    <ol class="toc">
+      <li><a href="#q1">Q1. Highest median sale price by city</a></li>
+      <li><a href="#q2">Q2. Mean compared with median, all rows</a></li>
+      <li><a href="#q3">Q3. City rank by mean, all rows and valid prices</a></li>
+      <li><a href="#q4">Q4. Campus area median price change, 2024 to 2025</a></li>
+      <li><a href="#q5">Q5. Median days on market by campus area</a></li>
+      <li><a href="#q6">Q6. Median tax as a percent of price, by campus area</a></li>
+      <li><a href="#q7">Q7. Lowest median price for a bedroom count</a></li>
+      <li><a href="#q8">Q8. Shortest days on market for a price range</a></li>
+      <li><a href="#q9">Q9. Sales by month for a city and year</a></li>
+      <li><a href="#q10">Q10. Distance to campus for a campus, budget and bedroom count</a></li>
+    </ol>
+  </nav>
+
+  <section class="rules" aria-labelledby="rules-title">
+    <h2 id="rules-title">How the numbers are computed</h2>
+    <ul>
+      <li><strong>Valid price</strong> means <code>sale_price</code> from $10,000 to $5,000,000, inclusive.
+        Every question uses valid prices, except Q2 and Q3 (all rows), and Q9 (all rows with a sale date).
+        <span id="stat-valid"></span></li>
+      <li><strong>City</strong> means city and state together, such as "Champaign, IL".
+        <strong>Campus area</strong> means the <code>university</code> column.</li>
+      <li><strong>Days on market</strong> is <code>contract_date</code> minus <code>list_date</code>, in days,
+        using only sales that have both dates. A blank date is not zero.</li>
+      <li><strong>Year and month</strong> come from <code>sale_date</code>.</li>
+      <li><strong>Median</strong> is used unless a question asks for a mean. When two or more cities or campus
+        areas tie, every tied one is named.</li>
+      <li><strong>Rounding:</strong> dollars to whole dollars; days, miles and percents to one decimal place.</li>
+      <li><strong>Repeated street addresses</strong> are kept. <code>listing_id</code> is the key, and
+        <code>parcel_number</code> tells units in one building apart.</li>
+    </ul>
+  </section>
+
   <main>
-    <h1>This site is under construction</h1>
-    <p>It will show findings from the College-town home sales dataset.</p>
+    <section class="question" id="q1" aria-labelledby="q1-title">
+      <h2 id="q1-title">Q1. Which city has the highest median sale price?</h2>
+      <p class="answer" id="q1-answer">Loading&hellip;</p>
+      <p class="note">Uses sales with valid prices. Each bar is one city's median sale price.</p>
+      <div class="chart" id="q1-chart"></div>
+      <div id="q1-table"></div>
+    </section>
+
+    <section class="question" id="q2" aria-labelledby="q2-title">
+      <h2 id="q2-title">Q2. Which city's mean sale price is furthest above its median, using all rows?</h2>
+      <p class="answer" id="q2-answer">Loading&hellip;</p>
+      <p class="note">Uses all rows, with no price rule, as the question asks. The gap is (mean minus median)
+        as a percent of the median. The chart shows the mean and median of every city.</p>
+      <div class="chart" id="q2-chart"></div>
+      <div id="q2-table"></div>
+    </section>
+
+    <section class="question" id="q3" aria-labelledby="q3-title">
+      <h2 id="q3-title">Q3. Ranked by mean sale price, which cities change rank when invalid prices are removed?</h2>
+      <p class="answer" id="q3-answer">Loading&hellip;</p>
+      <p class="note">Rank 1 is the highest mean. The left column ranks cities with all rows; the right column
+        ranks them with valid prices only. Orange lines change rank.</p>
+      <div class="chart" id="q3-chart"></div>
+      <div id="q3-table"></div>
+    </section>
+
+    <section class="question" id="q4" aria-labelledby="q4-title">
+      <h2 id="q4-title">Q4. How did each campus area's median sale price change from 2024 to 2025?</h2>
+      <p class="answer" id="q4-answer">Loading&hellip;</p>
+      <p class="note">Uses sales with valid prices, by year of sale. Change is (2025 median minus 2024 median)
+        divided by the 2024 median. Red bars are decreases.</p>
+      <div class="chart" id="q4-chart"></div>
+      <div id="q4-table"></div>
+    </section>
+
+    <section class="question" id="q5" aria-labelledby="q5-title">
+      <h2 id="q5-title">Q5. What is the median days on market for each campus area?</h2>
+      <p class="answer" id="q5-answer">Loading&hellip;</p>
+      <p class="note">Days on market is contract date minus list date, for valid-price sales with both dates.
+        Sales with a blank date are left out, not counted as zero.</p>
+      <div class="chart" id="q5-chart"></div>
+      <div id="q5-table"></div>
+    </section>
+
+    <section class="question" id="q6" aria-labelledby="q6-title">
+      <h2 id="q6-title">Q6. What is the median annual property tax as a percent of sale price, for each campus area?</h2>
+      <p class="answer" id="q6-answer">Loading&hellip;</p>
+      <p class="note">Uses valid-price sales where <code>tax_annual_amount</code> is greater than 0 and less than
+        the sale price. Each bar is the campus area's median of tax divided by sale price.</p>
+      <div class="chart" id="q6-chart"></div>
+      <div id="q6-table"></div>
+    </section>
+
+    <section class="question" id="q7" aria-labelledby="q7-title">
+      <h2 id="q7-title">Q7. For a selected number of bedrooms, which city has the lowest median sale price?</h2>
+      <div class="controls">
+        <label for="q7-beds">Bedrooms</label>
+        <select id="q7-beds"></select>
+      </div>
+      <p class="answer" id="q7-answer" aria-live="polite">Loading&hellip;</p>
+      <p class="note">Uses valid-price sales with the chosen bedroom count. Every city's median sale price and
+        number of sales are shown.</p>
+      <div class="chart" id="q7-chart"></div>
+      <div id="q7-table"></div>
+    </section>
+
+    <section class="question" id="q8" aria-labelledby="q8-title">
+      <h2 id="q8-title">Q8. For a selected price range, which city has the shortest median days on market?</h2>
+      <div class="controls">
+        <label for="q8-range">Price range</label>
+        <select id="q8-range"></select>
+      </div>
+      <p class="answer" id="q8-answer" aria-live="polite">Loading&hellip;</p>
+      <p class="note">Uses valid-price sales inside the chosen range that have both a list date and a contract
+        date. Every city's median days on market and number of sales used are shown.</p>
+      <div class="chart" id="q8-chart"></div>
+      <div id="q8-table"></div>
+    </section>
+
+    <section class="question" id="q9" aria-labelledby="q9-title">
+      <h2 id="q9-title">Q9. For a selected city and year, how many sales were recorded in each month?</h2>
+      <div class="controls">
+        <label for="q9-city">City</label>
+        <select id="q9-city"></select>
+        <label for="q9-year">Year</label>
+        <select id="q9-year"></select>
+      </div>
+      <p class="answer" id="q9-answer" aria-live="polite">Loading&hellip;</p>
+      <p class="note">Uses all rows with a sale date, including prices outside the valid range, as the question
+        asks. Months are from <code>sale_date</code>.</p>
+      <div class="chart" id="q9-chart"></div>
+      <div id="q9-table"></div>
+    </section>
+
+    <section class="question" id="q10" aria-labelledby="q10-title">
+      <h2 id="q10-title">Q10. For a selected campus area, budget and bedroom count, what is the median distance to campus?</h2>
+      <div class="controls">
+        <label for="q10-campus">Campus area</label>
+        <select id="q10-campus"></select>
+        <label for="q10-budget">Maximum budget</label>
+        <select id="q10-budget"></select>
+        <label for="q10-beds">Minimum bedrooms</label>
+        <select id="q10-beds"></select>
+      </div>
+      <p class="answer" id="q10-answer" aria-live="polite">Loading&hellip;</p>
+      <p class="note">Uses valid-price sales that meet all three conditions. The price limit applies to the sale
+        price. Distance is <code>miles_to_campus</code>, straight-line miles. The dashed line marks the median.</p>
+      <div class="chart" id="q10-chart"></div>
+      <div id="q10-table"></div>
+    </section>
   </main>
+
+  <section class="question" id="method" aria-labelledby="method-title">
+    <h2 id="method-title">Checking the numbers</h2>
+    <p>
+      The page computes Q1 to Q6 in the browser. <code>scripts/check_q1_q6.py</code> computes the same six
+      answers a second way, with pandas, from the same CSV file. Run it from the repository root with
+      <code>python3 scripts/check_q1_q6.py</code>. The script prints its results and does not write any file.
+    </p>
+  </section>
+
   <footer>
-    <p>Data: College-town home sales dataset, version 1.0 (2026). University of Illinois-Deloitte Foundation Center for Business Emerging Technologies. Data collected March 2026.</p>
+    <p>Data: College-town home sales dataset, version 1.0 (2026). University of Illinois-Deloitte Foundation
+      Center for Business Emerging Technologies. Data collected March 2026.</p>
   </footer>
+
+  <script src="js/report.js"></script>
 </body>
 </html>
