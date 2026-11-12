@@ -11,6 +11,7 @@
   const PRICE_MIN = 10000;
   const PRICE_MAX = 5000000;
   const DAY_MS = 86400000;
+  const MAP_W = 760;
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
     'August', 'September', 'October', 'November', 'December'];
@@ -133,6 +134,13 @@
         beds: num(cell(f, col, 'beds')),
         miles: num(cell(f, col, 'miles_to_campus')),
         tax: num(cell(f, col, 'tax_annual_amount')),
+        lat: num(cell(f, col, 'latitude')),
+        lon: num(cell(f, col, 'longitude')),
+        living: num(cell(f, col, 'living_area_sqft')),
+        yearBuilt: num(cell(f, col, 'year_built')),
+        garage: num(cell(f, col, 'has_garage')),
+        basement: num(cell(f, col, 'has_basement')),
+        fireplace: num(cell(f, col, 'has_fireplace')),
         listDay: dayNumber(cell(f, col, 'list_date')),
         contractDay: dayNumber(cell(f, col, 'contract_date')),
         saleDate: saleDate || null,
@@ -898,6 +906,562 @@
       cols.map(c => [c.label + ' miles', count(c.value)]));
   }
 
+  // ---------- Explore: filters, map, sliders, results table, comparison ----------
+  // These controls change only this section. Q1 to Q6 never read them.
+  const SLIDERS = {
+    living: { label: 'Living area', step: 1, get: r => (r.living !== null && r.living > 0 ? r.living : null) },
+    miles: { label: 'Distance from campus', step: 0.1, get: r => r.miles },
+    year: { label: 'Year built', step: 1, get: r => r.yearBuilt }
+  };
+  const FEATURE_KEYS = ['garage', 'basement', 'fireplace'];
+  const RESULT_COLS = [
+    { key: 'city', label: 'City', type: 'text' },
+    { key: 'campus', label: 'Campus area', type: 'text' },
+    { key: 'n', label: 'Sales', type: 'num', fmt: count },
+    { key: 'price', label: 'Median sale price', type: 'num', fmt: money },
+    { key: 'dom', label: 'Median days on market', type: 'num', fmt: days },
+    { key: 'miles', label: 'Median miles to campus', type: 'num', fmt: v => one(v) + ' miles' }
+  ];
+  const EXPLORE = { bounds: {}, cityCampus: {}, cityPos: [], mapNodes: {}, sort: { key: 'n', dir: 'desc' }, cityRows: [] };
+
+  function sliderText(key, v) {
+    if (key === 'living') return count(v) + ' sq ft';
+    if (key === 'miles') return one(v) + ' miles';
+    return String(v);
+  }
+
+  function initExploreData() {
+    Object.keys(SLIDERS).forEach(k => {
+      const vals = DB.valid.map(SLIDERS[k].get).filter(v => v !== null);
+      EXPLORE.bounds[k] = [Math.min.apply(null, vals), Math.max.apply(null, vals)];
+    });
+    // Each city's campus area: the one that most of its sales are assigned to.
+    const tally = Object.create(null);
+    DB.rows.forEach(r => {
+      tally[r.city] = tally[r.city] || Object.create(null);
+      tally[r.city][r.campus] = (tally[r.city][r.campus] || 0) + 1;
+    });
+    Object.keys(tally).forEach(c => {
+      let best = null;
+      Object.keys(tally[c]).forEach(k => {
+        if (best === null || tally[c][k] > tally[c][best]) best = k;
+      });
+      EXPLORE.cityCampus[c] = best;
+    });
+    // Map position of each city: the median latitude and longitude of its sales (all rows).
+    const byCity = byKey(DB.rows, r => r.city);
+    const validN = byKey(DB.valid, r => r.city);
+    EXPLORE.cityPos = DB.cities.filter(c => byCity[c]).map(c => ({
+      city: c,
+      lat: median(byCity[c].map(r => r.lat).filter(v => v !== null)),
+      lon: median(byCity[c].map(r => r.lon).filter(v => v !== null)),
+      n: (validN[c] || []).length
+    }));
+  }
+
+  // Read the controls into one filter object.
+  function readFilters() {
+    return {
+      campus: el('f-campus').value,
+      city: el('f-city').value,
+      year: el('f-year').value,
+      beds: el('f-beds').value,
+      price: el('f-price').value,
+      slider: el('f-slider').value,
+      lo: Number(el('f-lo').value),
+      hi: Number(el('f-hi').value),
+      garage: el('f-garage').value,
+      basement: el('f-basement').value,
+      fireplace: el('f-fireplace').value
+    };
+  }
+
+  // The range filter is on only when a handle is moved inside the full data range. The half-step
+  // tolerance stops a handle that sits at the end of the range (after the browser snaps it to a step)
+  // from switching the filter on.
+  function sliderIsOn(F) {
+    const b = EXPLORE.bounds[F.slider];
+    const tol = SLIDERS[F.slider].step / 2;
+    return !!(b && (F.lo > b[0] + tol || F.hi < b[1] - tol));
+  }
+
+  // Sales that pass every filter. skip: names of filters to ignore ('campus', 'city', 'year').
+  // Blank values are unknown: a row with a blank value is left out only when a filter uses that field.
+  // Returns { rows, unknown } where unknown counts rows left out only because of a blank.
+  function exploreRows(F, skip) {
+    const range = RANGES.filter(x => x.value === F.price)[0] || RANGES[0];
+    const slider = SLIDERS[F.slider];
+    const sliderOn = sliderIsOn(F);
+    const feats = FEATURE_KEYS.filter(k => F[k] === 'yes' || F[k] === 'no');
+    const rows = [];
+    let unknown = 0;
+    DB.valid.forEach(r => {
+      if (r.price < range.lo || r.price >= range.hi) return;
+      if (!skip.campus && F.campus && r.campus !== F.campus) return;
+      if (!skip.city && F.city && r.city !== F.city) return;
+      if (!skip.year && F.year && r.saleYear !== Number(F.year)) return;
+      if (F.beds && (r.beds === null || (F.beds === '7' ? r.beds < 7 : r.beds !== Number(F.beds)))) return;
+      let blank = false;
+      if (sliderOn) {
+        const v = slider.get(r);
+        if (v === null) blank = true;
+        else if (v < F.lo || v > F.hi) return;
+      }
+      for (let i = 0; i < feats.length; i++) {
+        const v = r[feats[i]];
+        if (v === null) { blank = true; continue; }
+        if ((F[feats[i]] === 'yes') !== (v === 1)) return;
+      }
+      if (blank) { unknown++; return; }
+      rows.push(r);
+    });
+    return { rows: rows, unknown: unknown };
+  }
+
+  function setOptionsFromList(id, list, selected) {
+    setOptions(id, list, selected);
+  }
+
+  function refreshCityOptions() {
+    const campus = el('f-campus').value;
+    const current = el('f-city').value;
+    const cities = DB.cities.filter(c => !campus || EXPLORE.cityCampus[c] === campus);
+    const keep = cities.indexOf(current) !== -1 ? current : '';
+    setOptionsFromList('f-city', [{ value: '', label: 'All cities' }]
+      .concat(cities.map(c => ({ value: c, label: c }))), keep);
+  }
+
+  function refreshCompareOptions() {
+    const mode = el('c-mode').value;
+    const list = mode === 'campus' ? DB.campuses : DB.cities;
+    const defaults = mode === 'campus'
+      ? ['University of Michigan', 'University of Wisconsin-Madison']
+      : ['Ann Arbor, MI', 'Madison, WI'];
+    ['c-a', 'c-b'].forEach((id, i) => {
+      const current = el(id).value;
+      const keep = list.indexOf(current) !== -1 ? current : (list.indexOf(defaults[i]) !== -1 ? defaults[i] : list[0]);
+      setOptionsFromList(id, list.map(v => ({ value: v, label: v })), keep);
+    });
+  }
+
+  function fillExploreControls() {
+    setOptions('f-campus', [{ value: '', label: 'All campus areas' }]
+      .concat(DB.campuses.map(c => ({ value: c, label: c }))), '');
+    refreshCityOptions();
+    setOptions('f-year', [{ value: '', label: 'All years' }]
+      .concat(DB.years.map(y => ({ value: y, label: String(y) }))), '');
+    const beds = [{ value: '', label: 'Any number' }];
+    for (let b = 1; b <= 6; b++) beds.push({ value: b, label: bedsLabel(b) });
+    beds.push({ value: 7, label: '7 or more bedrooms' });
+    setOptions('f-beds', beds, '');
+    setOptions('f-price', RANGES.map(r => ({ value: r.value, label: r.label })), 'all');
+    const yesNo = [{ value: 'any', label: 'Any (blank is not counted)' }, { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }];
+    setOptions('f-garage', yesNo, 'any');
+    setOptions('f-basement', yesNo, 'any');
+    setOptions('f-fireplace', yesNo, 'any');
+    setOptions('f-slider', Object.keys(SLIDERS).map(k => ({ value: k, label: SLIDERS[k].label })), 'living');
+    setOptions('c-mode', [{ value: 'campus', label: 'Campus areas' }, { value: 'city', label: 'Cities' }], 'campus');
+    refreshCompareOptions();
+  }
+
+  function hasOption(id, v) {
+    return Array.prototype.some.call(el(id).options, o => o.value === v);
+  }
+
+  // Set the slider's limits to the data range, and its handles to lo and hi (defaults: the full range).
+  function configureSlider(key, lo, hi) {
+    const b = EXPLORE.bounds[key];
+    const low = el('f-lo');
+    const high = el('f-hi');
+    [low, high].forEach(e => { e.min = b[0]; e.max = b[1]; e.step = SLIDERS[key].step; });
+    let L = typeof lo === 'number' && isFinite(lo) ? lo : b[0];
+    let H = typeof hi === 'number' && isFinite(hi) ? hi : b[1];
+    L = Math.min(Math.max(L, b[0]), b[1]);
+    H = Math.min(Math.max(H, b[0]), b[1]);
+    if (L > H) { const t = L; L = H; H = t; }
+    low.value = String(L);
+    high.value = String(H);
+    updateSliderText(key);
+  }
+
+  function updateSliderText(key) {
+    setText('f-lo-text', sliderText(key, Number(el('f-lo').value)));
+    setText('f-hi-text', sliderText(key, Number(el('f-hi').value)));
+  }
+
+  function onSliderInput(id) {
+    const lo = el('f-lo');
+    const hi = el('f-hi');
+    if (Number(lo.value) > Number(hi.value)) {
+      if (id === 'f-lo') hi.value = lo.value; else lo.value = hi.value;
+    }
+    updateSliderText(el('f-slider').value);
+    renderExplore();
+  }
+
+  // The address bar holds the current filters, so a copied link shows the same view.
+  function writeURL(F) {
+    const p = new URLSearchParams();
+    if (F.campus) p.set('campus', F.campus);
+    if (F.city) p.set('city', F.city);
+    if (F.year) p.set('year', F.year);
+    if (F.beds) p.set('beds', F.beds);
+    if (F.price !== 'all') p.set('price', F.price);
+    if (sliderIsOn(F)) {
+      p.set('slider', F.slider);
+      p.set('lo', String(F.lo));
+      p.set('hi', String(F.hi));
+    }
+    FEATURE_KEYS.forEach(k => { if (F[k] !== 'any') p.set(k, F[k]); });
+    if (el('c-mode').value !== 'campus') p.set('cmode', el('c-mode').value);
+    p.set('ca', el('c-a').value);
+    p.set('cb', el('c-b').value);
+    const qs = p.toString();
+    try {
+      history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+    } catch (e) {
+      // Some browsers refuse to change the address (for example, a file opened from disk). The filters still work.
+    }
+  }
+
+  function applyFromURL() {
+    const p = new URLSearchParams(location.search);
+    const pick = (id, key) => {
+      const v = p.get(key);
+      if (v !== null && hasOption(id, v)) el(id).value = v;
+    };
+    pick('f-campus', 'campus');
+    refreshCityOptions();
+    pick('f-city', 'city');
+    pick('f-year', 'year');
+    pick('f-beds', 'beds');
+    pick('f-price', 'price');
+    pick('f-garage', 'garage');
+    pick('f-basement', 'basement');
+    pick('f-fireplace', 'fireplace');
+    pick('c-mode', 'cmode');
+    refreshCompareOptions();
+    pick('c-a', 'ca');
+    pick('c-b', 'cb');
+    const slider = p.get('slider');
+    if (slider && SLIDERS[slider]) el('f-slider').value = slider;
+    const lo = p.get('lo');
+    const hi = p.get('hi');
+    configureSlider(el('f-slider').value,
+      lo !== null ? Number(lo) : null,
+      hi !== null ? Number(hi) : null);
+  }
+
+  // The map: one circle per city, placed at the median latitude and longitude of its sales.
+  function buildMap() {
+    const host = el('f-map');
+    const pts = EXPLORE.cityPos;
+    const pad = 40;
+    const lats = pts.map(p => p.lat);
+    const lons = pts.map(p => p.lon);
+    const latMin = Math.min.apply(null, lats);
+    const latMax = Math.max.apply(null, lats);
+    const lonMin = Math.min.apply(null, lons);
+    const lonMax = Math.max.apply(null, lons);
+    const kx = Math.cos((latMin + latMax) / 2 * Math.PI / 180);
+    const scale = (MAP_W - 2 * pad) / ((lonMax - lonMin) * kx);
+    const H = Math.round((latMax - latMin) * scale + 2 * pad);
+    const x = p => pad + (p.lon - lonMin) * kx * scale;
+    const y = p => pad + (latMax - p.lat) * scale;
+    const maxN = Math.max.apply(null, pts.map(p => p.n));
+    const svg = svgRoot(host, MAP_W, H, 'Map of cities. Click a city to filter the results to it.');
+    pts.forEach(p => {
+      const cx = x(p);
+      const cy = y(p);
+      const radius = 5 + 16 * Math.sqrt(p.n / maxN);
+      const node = svgEl('circle', {
+        cx: cx, cy: cy, r: radius.toFixed(1), class: 'city', tabindex: '0', role: 'button',
+        'aria-pressed': 'false',
+        'aria-label': p.city + ': ' + count(p.n) + ' valid-price sales. Press to filter to this city.'
+      });
+      withTitle(node, p.city + ': ' + count(p.n) + ' valid-price sales');
+      node.addEventListener('click', () => selectCityFromMap(p.city));
+      node.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectCityFromMap(p.city); }
+      });
+      // Labels stay hidden until a city is hovered, focused or selected, because the cities overlap.
+      const wrap = svgEl('g', { class: 'city-wrap' });
+      wrap.appendChild(node);
+      wrap.appendChild(svgText(cx + radius + 4, cy + 4, p.city, { class: 'map-label' }));
+      svg.appendChild(wrap);
+      EXPLORE.mapNodes[p.city] = { circle: node, wrap: wrap };
+    });
+  }
+
+  function updateMapSelection(city) {
+    Object.keys(EXPLORE.mapNodes).forEach(c => {
+      const m = EXPLORE.mapNodes[c];
+      const on = c === city;
+      m.circle.setAttribute('class', on ? 'city selected' : 'city');
+      m.circle.setAttribute('aria-pressed', on ? 'true' : 'false');
+      m.wrap.setAttribute('class', on ? 'city-wrap selected' : 'city-wrap');
+    });
+  }
+
+  function selectCityFromMap(city) {
+    if (el('f-city').value === city) {
+      el('f-city').value = '';
+    } else {
+      el('f-campus').value = EXPLORE.cityCampus[city] || '';
+      refreshCityOptions();
+      el('f-city').value = city;
+    }
+    renderExplore();
+  }
+
+  function buildCityRows(rows) {
+    const groups = byKey(rows, r => r.city);
+    return Object.keys(groups).map(c => {
+      const g = groups[c];
+      const dom = g.filter(r => r.listDay !== null && r.contractDay !== null).map(r => r.contractDay - r.listDay);
+      const miles = g.map(r => r.miles).filter(m => m !== null);
+      return {
+        city: c,
+        campus: EXPLORE.cityCampus[c] || '',
+        n: g.length,
+        price: median(prices(g)),
+        dom: median(dom),
+        miles: median(miles)
+      };
+    });
+  }
+
+  function renderResults() {
+    const host = el('f-table');
+    host.textContent = '';
+    const items = EXPLORE.cityRows;
+    if (!items.length) {
+      const p = document.createElement('p');
+      p.className = 'note';
+      p.textContent = 'No sales match these filters.';
+      host.appendChild(p);
+      return;
+    }
+    const s = EXPLORE.sort;
+    const col = RESULT_COLS.filter(c => c.key === s.key)[0];
+    const sorted = items.slice().sort((a, b) => {
+      const x = a[s.key];
+      const y = b[s.key];
+      if (col.type === 'text') {
+        const c = x.localeCompare(y);
+        return s.dir === 'asc' ? c : -c;
+      }
+      // Blank values always go last, whatever the direction.
+      if (x === null && y === null) return 0;
+      if (x === null) return 1;
+      if (y === null) return -1;
+      return s.dir === 'asc' ? x - y : y - x;
+    });
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const tr = document.createElement('tr');
+    RESULT_COLS.forEach(c => {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      if (c.type === 'num') th.className = 'num';
+      if (s.key === c.key) th.setAttribute('aria-sort', s.dir === 'asc' ? 'ascending' : 'descending');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sortable';
+      btn.textContent = c.label;
+      btn.addEventListener('click', () => {
+        if (EXPLORE.sort.key === c.key) {
+          EXPLORE.sort = { key: c.key, dir: EXPLORE.sort.dir === 'asc' ? 'desc' : 'asc' };
+        } else {
+          EXPLORE.sort = { key: c.key, dir: c.type === 'num' ? 'desc' : 'asc' };
+        }
+        renderResults();
+      });
+      th.appendChild(btn);
+      tr.appendChild(th);
+    });
+    thead.appendChild(tr);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    sorted.forEach(row => {
+      const tr2 = document.createElement('tr');
+      RESULT_COLS.forEach(c => {
+        const td = document.createElement('td');
+        const v = row[c.key];
+        if (c.type === 'num') td.className = 'num';
+        td.textContent = (c.type === 'text') ? v : (v === null ? '—' : c.fmt(v));
+        tr2.appendChild(td);
+      });
+      tbody.appendChild(tr2);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    host.appendChild(wrap);
+    const caption = document.createElement('p');
+    caption.className = 'note';
+    caption.textContent = 'Sorted by ' + col.label.toLowerCase() + (s.dir === 'asc' ? ', lowest first.' : ', highest first.');
+    host.appendChild(caption);
+  }
+
+  function renderYearChart(F) {
+    const counts = Object.create(null);
+    exploreRows(F, { year: true }).rows.forEach(r => { counts[r.saleYear] = (counts[r.saleYear] || 0) + 1; });
+    const cols = DB.years.map(y => {
+      const n = counts[y] || 0;
+      return { label: String(y), value: n, text: count(n), tip: y + ': ' + plural(n, 'sale'),
+        cls: String(y) === F.year ? 'hi' : 'b1' };
+    });
+    vbar('f-year-chart', { label: 'Column chart: sales by year of sale, under the other filters', cols: cols });
+  }
+
+  function renderCompare(F) {
+    const mode = el('c-mode').value;
+    const a = el('c-a').value;
+    const b = el('c-b').value;
+    const base = exploreRows(F, { campus: true, city: true }).rows;
+    const side = name => {
+      const rows = base.filter(r => (mode === 'campus' ? r.campus === name : r.city === name));
+      const dom = rows.filter(r => r.listDay !== null && r.contractDay !== null).map(r => r.contractDay - r.listDay);
+      const miles = rows.map(r => r.miles).filter(m => m !== null);
+      return { name: name, n: rows.length, price: median(prices(rows)), dom: median(dom), miles: median(miles) };
+    };
+    const table = el('c-table');
+    const chartHost = el('c-chart');
+    table.textContent = '';
+    chartHost.textContent = '';
+    if (a === b) {
+      const p = document.createElement('p');
+      p.className = 'note';
+      p.textContent = 'Pick two different places to compare.';
+      table.appendChild(p);
+      return;
+    }
+    const A = side(a);
+    const B = side(b);
+    const fmtOrDash = (v, f) => (v === null ? '—' : f(v));
+    const rowsOut = [
+      ['Number of sales', count(A.n), count(B.n)],
+      ['Median sale price', fmtOrDash(A.price, money), fmtOrDash(B.price, money)],
+      ['Median days on market', fmtOrDash(A.dom, days), fmtOrDash(B.dom, days)],
+      ['Median miles to campus', fmtOrDash(A.miles, v => one(v) + ' miles'),
+        fmtOrDash(B.miles, v => one(v) + ' miles')]
+    ];
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    const t = document.createElement('table');
+    const head = document.createElement('thead');
+    const hr = document.createElement('tr');
+    ['Measure', A.name, B.name].forEach((h, i) => {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = h;
+      if (i > 0) th.className = 'num';
+      hr.appendChild(th);
+    });
+    head.appendChild(hr);
+    t.appendChild(head);
+    const body = document.createElement('tbody');
+    rowsOut.forEach(r => {
+      const tr = document.createElement('tr');
+      r.forEach((v, i) => {
+        const td = document.createElement('td');
+        td.textContent = v;
+        if (i > 0) td.className = 'num';
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+    t.appendChild(body);
+    wrap.appendChild(t);
+    table.appendChild(wrap);
+    const withPrice = [A, B].filter(s => s.price !== null);
+    if (withPrice.length) {
+      hbar('c-chart', {
+        label: 'Bar chart: median sale price of the two places, side by side',
+        rows: [A, B].map(s => ({
+          label: campusLabel(s.name),
+          bars: [{ value: s.price || 0, text: s.price === null ? 'No sales' : money(s.price),
+            tip: s.name + ': median ' + (s.price === null ? 'no sales' : money(s.price)) + ' from ' + count(s.n) + ' sales',
+            cls: s === A ? 'b1' : 'hi' }]
+        }))
+      });
+    }
+  }
+
+  function renderExplore() {
+    if (!DB) return;
+    const F = readFilters();
+    const all = exploreRows(F, {});
+    const rows = all.rows;
+    setText('k-count', count(rows.length));
+    setText('k-median', rows.length ? money(median(prices(rows))) : 'No sales');
+    let note = '';
+    if (!rows.length) {
+      note = 'No sales match these filters. Widen a filter to see results.';
+    } else if (all.unknown > 0) {
+      note = count(all.unknown) + ' sales are left out because a field that a filter uses is blank' +
+        ' (or living area is 0). A blank is treated as unknown, not as no.';
+    }
+    setText('f-note', note);
+    updateSliderText(F.slider);
+    updateMapSelection(F.city);
+    renderYearChart(F);
+    EXPLORE.cityRows = buildCityRows(rows);
+    renderResults();
+    renderCompare(F);
+    writeURL(F);
+  }
+
+  function resetExplore() {
+    el('f-campus').value = '';
+    refreshCityOptions();
+    ['f-year', 'f-beds', 'f-garage', 'f-basement', 'f-fireplace'].forEach(id => { el(id).value = id === 'f-garage' || id === 'f-basement' || id === 'f-fireplace' ? 'any' : ''; });
+    el('f-price').value = 'all';
+    el('f-slider').value = 'living';
+    configureSlider('living');
+    renderExplore();
+  }
+
+  function copyLink() {
+    const status = el('f-copy-status');
+    const done = () => { status.textContent = 'Link copied. Paste it to open this same view.'; };
+    const fail = () => { status.textContent = 'Could not copy automatically. Copy the link from the address bar.'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(location.href).then(done, fail);
+    } else {
+      fail();
+    }
+  }
+
+  function onExploreChange(e) {
+    if (e.target.id === 'f-campus') refreshCityOptions();
+    if (e.target.id === 'c-mode') refreshCompareOptions();
+    renderExplore();
+  }
+
+  function bindExplore() {
+    ['f-campus', 'f-city', 'f-year', 'f-beds', 'f-price', 'f-garage', 'f-basement', 'f-fireplace',
+      'c-mode', 'c-a', 'c-b'].forEach(id => el(id).addEventListener('change', onExploreChange));
+    el('f-slider').addEventListener('change', () => {
+      configureSlider(el('f-slider').value);
+      renderExplore();
+    });
+    ['f-lo', 'f-hi'].forEach(id => el(id).addEventListener('input', () => onSliderInput(id)));
+    el('f-reset').addEventListener('click', resetExplore);
+    el('f-copy').addEventListener('click', copyLink);
+  }
+
+  function initExplore() {
+    initExploreData();
+    fillExploreControls();
+    applyFromURL();
+    buildMap();
+    bindExplore();
+    renderExplore();
+  }
+
   // ---------- Page-level and setup ----------
   function fillControls() {
     setOptions('q7-beds', [1, 2, 3, 4, 5, 6, 7].map(b => ({
@@ -963,6 +1527,7 @@
         fillIntroStats();
         renderAll();
         bindControls();
+        initExplore();
         const status = el('stat-line');
         status.textContent = 'Loaded ' + count(DB.rows.length) + ' sales from the data file. ' +
           'All numbers below were computed from it.';
